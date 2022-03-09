@@ -25,5 +25,11 @@ export class CodeInsightsGqlBackendLimited extends CodeInsightsGqlBackend {
     public readonly UIFeatures: UiFeaturesConfig = {
         licensed: false,
         insightsLimit: 2,
+        getDashboardsContent: () => ({
+            addRemoveInsightsButton: {
+                disabled: true,
+                tooltip: 'TODO: Need tooltip message',
+            },
+        }),
     }
 }

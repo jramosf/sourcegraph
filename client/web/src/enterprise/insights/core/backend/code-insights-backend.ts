@@ -29,6 +29,14 @@ import {
 export interface UiFeaturesConfig {
     licensed: boolean
     insightsLimit: number | null
+    getDashboardsContent: (
+        currentDashboard?: InsightDashboard
+    ) => {
+        addRemoveInsightsButton: {
+            disabled: boolean
+            tooltip: string | undefined
+        }
+    }
 }
 
 /**

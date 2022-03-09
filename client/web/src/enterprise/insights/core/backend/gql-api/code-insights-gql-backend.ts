@@ -23,6 +23,10 @@ import {
 import { fromObservableQuery } from '@sourcegraph/http-client'
 import { ViewContexts } from '@sourcegraph/shared/src/api/extension/extensionHostApi'
 
+import {
+    getDashboardPermissions,
+    getTooltipMessage,
+} from '../../../pages/dashboards/dashboard-page/utils/get-dashboard-permissions'
 import { BackendInsight, Insight, InsightDashboard, InsightsDashboardScope, InsightsDashboardType } from '../../types'
 import { ALL_INSIGHTS_DASHBOARD_ID } from '../../types/dashboard/virtual-dashboard'
 import { SupportedInsightSubject } from '../../types/subjects'
@@ -481,6 +485,16 @@ export class CodeInsightsGqlBackend implements CodeInsightsBackend {
     public readonly UIFeatures: UiFeaturesConfig = {
         licensed: true,
         insightsLimit: null,
+        getDashboardsContent: (currentDashboard?: InsightDashboard) => {
+            const permissions = getDashboardPermissions(currentDashboard)
+
+            return {
+                addRemoveInsightsButton: {
+                    disabled: !permissions.isConfigurable,
+                    tooltip: getTooltipMessage(permissions),
+                },
+            }
+        },
     }
 }
 
