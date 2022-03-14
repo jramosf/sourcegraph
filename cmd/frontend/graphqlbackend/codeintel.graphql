@@ -539,7 +539,7 @@ extend type GitTree {
     """
     Provides info on the level of code-intel support for the direct children of this git tree.
     """
-    codeIntelInfo: [GitTreeCodeIntelInfo!]
+    codeIntelInfo: GitTreeCodeIntelInfo
 }
 
 extend type GitBlob {
@@ -1432,18 +1432,24 @@ type IndexConfiguration {
 Details code-intel support for a group of files rooted at a tree.
 """
 type GitTreeCodeIntelInfo {
-    """
-    The number of files part of this group.
-    """
-    numFiles: Int!
-    """
-    The list of absolute paths part of this group.
-    """
-    coveredPaths: [String!]
-    """
-    The level of code-intel support for this group.
-    """
-    support: CodeIntelSupport!
+    searchBasedSupport: [GitTreeSearchBasedCoverage!]!
+    preciseSupport: [GitTreePreciseCoverage!]!
+}
+
+type GitTreeSearchBasedCoverage {
+    coveredPaths: [String!]!
+    support: SearchBasedCodeIntelSupport!
+}
+
+type GitTreePreciseCoverage {
+    coveredPaths: [String!]!
+    support: PreciseCodeIntelSupport!
+    confidence: InferredPreciseSupportLevel!
+}
+
+enum InferredPreciseSupportLevel {
+    LANGUAGE_SUPPORTED
+    PROJECT_STRUCTURE_SUPPORTED
 }
 
 """

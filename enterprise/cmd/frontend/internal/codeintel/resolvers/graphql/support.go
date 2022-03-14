@@ -35,7 +35,7 @@ type codeIntelSupportResolver struct {
 	errTracer *observation.ErrCollector
 }
 
-func NewCodeIntelSupportResolver(resolver resolvers.Resolver, repoName api.RepoName, path string, errTracer *observation.ErrCollector) gql.CodeIntelSupportResolver {
+func NewCodeIntelSupportResolver(resolver resolvers.Resolver, repoName api.RepoName, path string, errTracer *observation.ErrCollector) gql.GitBlobCodeeIntelSupportResolver {
 	return &codeIntelSupportResolver{
 		repo:      repoName,
 		path:      path,
@@ -44,7 +44,7 @@ func NewCodeIntelSupportResolver(resolver resolvers.Resolver, repoName api.RepoN
 	}
 }
 
-func (r *codeIntelSupportResolver) SearchBasedSupport(ctx context.Context) (_ gql.SearchBasedCodeIntelSupportResolver, err error) {
+func (r *codeIntelSupportResolver) SearchBasedSupport(ctx context.Context) (_ gql.SearchBasedSupportResolver, err error) {
 	var (
 		ctagsSupported bool
 		language       string
@@ -69,7 +69,7 @@ func (r *codeIntelSupportResolver) SearchBasedSupport(ctx context.Context) (_ gq
 	return NewSearchBasedCodeIntelResolver(nil), nil
 }
 
-func (r *codeIntelSupportResolver) PreciseSupport(ctx context.Context) (gql.PreciseCodeIntelSupportResolver, error) {
+func (r *codeIntelSupportResolver) PreciseSupport(ctx context.Context) (gql.PreciseSupportResolver, error) {
 	return NewPreciseCodeIntelSupportResolver(r.path), nil
 }
 
@@ -77,7 +77,7 @@ type searchBasedSupportResolver struct {
 	language *string
 }
 
-func NewSearchBasedCodeIntelResolver(language *string) gql.SearchBasedCodeIntelSupportResolver {
+func NewSearchBasedCodeIntelResolver(language *string) gql.SearchBasedSupportResolver {
 	return &searchBasedSupportResolver{language}
 }
 
@@ -96,7 +96,7 @@ type preciseCodeIntelSupportResolver struct {
 	indexers []gql.CodeIntelIndexerResolver
 }
 
-func NewPreciseCodeIntelSupportResolver(filepath string) gql.PreciseCodeIntelSupportResolver {
+func NewPreciseCodeIntelSupportResolver(filepath string) gql.PreciseSupportResolver {
 	return &preciseCodeIntelSupportResolver{
 		indexers: languageToIndexer[path.Ext(filepath)],
 	}

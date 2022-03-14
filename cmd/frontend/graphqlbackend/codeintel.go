@@ -25,8 +25,8 @@ type CodeIntelResolver interface {
 	CommitGraph(ctx context.Context, id graphql.ID) (CodeIntelligenceCommitGraphResolver, error)
 	QueueAutoIndexJobsForRepo(ctx context.Context, args *QueueAutoIndexJobsForRepoArgs) ([]LSIFIndexResolver, error)
 	GitBlobLSIFData(ctx context.Context, args *GitBlobLSIFDataArgs) (GitBlobLSIFDataResolver, error)
-	GitBlobCodeIntelInfo(ctx context.Context, args *GitTreeEntryCodeIntelInfoArgs) (CodeIntelSupportResolver, error)
-	GitTreeCodeIntelInfo(ctx context.Context, args *GitTreeEntryCodeIntelInfoArgs) (*[]CodeIntelInfoResolver, error)
+	GitBlobCodeIntelInfo(ctx context.Context, args *GitTreeEntryCodeIntelInfoArgs) (GitBlobCodeeIntelSupportResolver, error)
+	GitTreeCodeIntelInfo(ctx context.Context, args *GitTreeEntryCodeIntelInfoArgs) (GitTreeCodeIntelSupportResolver, error)
 
 	CodeIntelligenceConfigurationPolicies(ctx context.Context, args *CodeIntelligenceConfigurationPoliciesArgs) (CodeIntelligenceConfigurationPolicyConnectionResolver, error)
 	CreateCodeIntelligenceConfigurationPolicy(ctx context.Context, args *CreateCodeIntelligenceConfigurationPolicyArgs) (CodeIntelligenceConfigurationPolicyResolver, error)
@@ -370,18 +370,28 @@ type GitTreeEntryCodeIntelInfoArgs struct {
 	Commit string
 }
 
-type CodeIntelInfoResolver interface {
-	NumFiles(ctx context.Context) int32
-	CoveredPaths(ctx context.Context) *[]string
-	Support(ctx context.Context) CodeIntelSupportResolver
+type GitTreeCodeIntelSupportResolver interface {
+	SearchBasedSupport(context.Context) ([]GitTreeSearchBasedCoverage, error)
+	PreciseSupport(context.Context) ([]GitTreePreciseCoverage, error)
 }
 
-type CodeIntelSupportResolver interface {
-	SearchBasedSupport(context.Context) (SearchBasedCodeIntelSupportResolver, error)
-	PreciseSupport(context.Context) (PreciseCodeIntelSupportResolver, error)
+type GitTreeSearchBasedCoverage interface {
+	CoveredPaths() []string
+	Support() SearchBasedSupportResolver
 }
 
-type PreciseCodeIntelSupportResolver interface {
+type GitTreePreciseCoverage interface {
+	CoveredPaths() []string
+	Support() PreciseSupportResolver
+	Confidence() string
+}
+
+type GitBlobCodeeIntelSupportResolver interface {
+	SearchBasedSupport(context.Context) (SearchBasedSupportResolver, error)
+	PreciseSupport(context.Context) (PreciseSupportResolver, error)
+}
+
+type PreciseSupportResolver interface {
 	SupportLevel() string
 	Indexers() *[]CodeIntelIndexerResolver
 }
@@ -391,7 +401,7 @@ type CodeIntelIndexerResolver interface {
 	URL() string
 }
 
-type SearchBasedCodeIntelSupportResolver interface {
+type SearchBasedSupportResolver interface {
 	SupportLevel() string
 	Language() *string
 }
