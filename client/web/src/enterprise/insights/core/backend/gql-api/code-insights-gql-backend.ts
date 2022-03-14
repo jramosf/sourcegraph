@@ -486,7 +486,7 @@ export class CodeInsightsGqlBackend implements CodeInsightsBackend {
         licensed: true,
         insightsLimit: null,
         getDashboardsContent: (currentDashboard?: InsightDashboard) => {
-            const permissions = getDashboardPermissions(currentDashboard)
+            const permissions = getDashboardPermissions(currentDashboard, true)
 
             return {
                 addRemoveInsightsButton: {
