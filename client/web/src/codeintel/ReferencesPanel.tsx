@@ -140,7 +140,7 @@ export const RevisionResolvingReferencesList: React.FunctionComponent<
     return <FilterableReferencesList {...props} token={token} />
 }
 
-interface Location {
+export interface Location {
     resource: {
         path: string
         content: string
@@ -154,9 +154,11 @@ interface Location {
     range?: Range
     url: string
     lines: string[]
+
+    precise: boolean
 }
 
-const buildLocation = (node: LocationFields): Location => {
+export const buildLocation = (node: LocationFields): Location => {
     const location: Location = {
         resource: {
             repository: { name: node.resource.repository.name },
@@ -166,6 +168,7 @@ const buildLocation = (node: LocationFields): Location => {
         },
         url: '',
         lines: [],
+        precise: true,
     }
     if (node.range !== null) {
         location.range = node.range
@@ -240,9 +243,9 @@ export const ReferencesList: React.FunctionComponent<
             line: props.token.line - 1,
             character: props.token.character - 1,
             filter: props.filter || null,
-            firstReferences: 100,
+            firstReferences: 20,
             afterReferences: null,
-            firstImplementations: 100,
+            firstImplementations: 5,
             afterImplementations: null,
         },
     })
@@ -484,20 +487,6 @@ const CollapsibleLocationList: React.FunctionComponent<CollapsibleLocationListPr
                             setActiveLocation={props.setActiveLocation}
                             filter={props.filter}
                         />
-                        {props.hasMore &&
-                            props.fetchMore !== undefined &&
-                            (props.loadingMore ? (
-                                <div className="text-center mb-1">
-                                    <em>Loading more {props.name}...</em>
-                                    <LoadingSpinner inline={true} />
-                                </div>
-                            ) : (
-                                <div className="text-center mb-1">
-                                    <Button variant="secondary" onClick={props.fetchMore}>
-                                        Load more {props.name}
-                                    </Button>
-                                </div>
-                            ))}
                     </>
                 ) : (
                     <p className="text-muted pl-2">
@@ -510,6 +499,21 @@ const CollapsibleLocationList: React.FunctionComponent<CollapsibleLocationListPr
                         )}
                     </p>
                 )}
+
+                {props.hasMore &&
+                    props.fetchMore !== undefined &&
+                    (props.loadingMore ? (
+                        <div className="text-center mb-1">
+                            <em>Loading more {props.name}...</em>
+                            <LoadingSpinner inline={true} />
+                        </div>
+                    ) : (
+                        <div className="text-center mb-1">
+                            <Button variant="secondary" onClick={props.fetchMore}>
+                                Load more {props.name}
+                            </Button>
+                        </div>
+                    ))}
             </Collapse>
         </>
     )
