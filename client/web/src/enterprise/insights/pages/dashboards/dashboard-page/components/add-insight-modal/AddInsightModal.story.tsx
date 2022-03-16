@@ -101,6 +101,7 @@ const mockInsights: ReachableInsight[] = [
     type: InsightExecutionType.Backend,
     viewType: InsightType.SearchBased,
     visibility: 'global',
+    isFrozen: false,
 }))
 
 const codeInsightsBackend = {
