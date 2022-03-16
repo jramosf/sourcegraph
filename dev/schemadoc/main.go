@@ -6,11 +6,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"os/exec"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -179,132 +177,71 @@ func generateInternal(db *sql.DB, name string, run runFunc) (_ string, err error
 
 	for schemaName, schema := range schemas {
 		sort.Slice(schema.Tables, func(i, j int) bool { return schema.Tables[i].Name < schema.Tables[j].Name })
-
 		for _, table := range schema.Tables {
-			sizes := []int{
-				len("Column"),
-				len("Type"),
-				len("Collation"),
-				len("Nullable"),
-				len("Default"),
-			}
-			for _, column := range table.Columns {
-				if n := len(column.Name); n > sizes[0] {
-					sizes[0] = n
-				}
-				if n := len(column.TypeName); n > sizes[1] {
-					sizes[1] = n
-				}
-				defaultValue := column.Default
-				if column.IsGenerated == "ALWAYS" {
-					defaultValue = "generated always as (" + column.GenerationExpression + ") stored"
-				}
-				if n := len(defaultValue); n > sizes[4] {
-					sizes[4] = n
-				}
-			}
-
-			center := func(s string, n int) string {
-				x := float64(n - len(s))
-				i := int(math.Floor(x / 2))
-				if i <= 0 {
-					i = 1
-				}
-				j := int(math.Ceil(x / 2))
-				if j <= 0 {
-					j = 1
-				}
-
-				return strings.Repeat(" ", i) + s + strings.Repeat(" ", j)
-			}
-
-			header := strings.Join([]string{
-				center("Column", sizes[0]+2),
-				center("Type", sizes[1]+2),
-				center("Collation", sizes[2]+2),
-				center("Nullable", sizes[3]+2),
-				center("Default", sizes[4]+2),
-			}, "|")
-
-			sep := strings.Join([]string{
-				strings.Repeat("-", sizes[0]+2),
-				strings.Repeat("-", sizes[1]+2),
-				strings.Repeat("-", sizes[2]+2),
-				strings.Repeat("-", sizes[3]+2),
-				strings.Repeat("-", sizes[4]+2),
-			}, "+")
-
 			docs = append(docs, fmt.Sprintf("# Table \"%s.%s\"", schemaName, table.Name))
-			docs = append(docs, "```")
-			docs = append(docs, header)
-			docs = append(docs, sep)
+			docs = append(docs, "\n")
+			if table.Comment != "" {
+				docs = append(docs, table.Comment+"\n")
+			}
 
-			sort.Slice(table.Columns, func(i, j int) bool { return table.Columns[i].Index < table.Columns[j].Index })
+			docs = append(docs, "| "+strings.Join([]string{"Column", "Type", "Nullable", "Default", "Comment"}, " | ")+" |")
+			docs = append(docs, "| "+strings.Join([]string{"---", "---", "---", "---", "---"}, " | ")+" |")
 
+			sort.Slice(table.Columns, func(i, j int) bool { return table.Columns[i].Name < table.Columns[j].Name })
 			for _, column := range table.Columns {
-				nullConstraint := "not null"
+				values := []string{}
+				values = append(values, column.Name)
+				values = append(values, column.TypeName)
 				if column.IsNullable {
-					nullConstraint = ""
+					values = append(values, "Yes")
+				} else {
+					values = append(values, "No")
 				}
-
-				defaultValue := column.Default
 				if column.IsGenerated == "ALWAYS" {
-					defaultValue = "generated always as (" + column.GenerationExpression + ") stored"
+					// TODO - parse more specifically
+					values = append(values, "generated always as ("+column.GenerationExpression+") stored")
+				} else {
+					values = append(values, column.Default)
 				}
 
-				col := " " + strings.Join([]string{
-					fmt.Sprintf("%-"+strconv.Itoa(sizes[0])+"s", column.Name),
-					fmt.Sprintf("%-"+strconv.Itoa(sizes[1])+"s", column.TypeName),
-					fmt.Sprintf("%-"+strconv.Itoa(sizes[2])+"s", ""),
-					fmt.Sprintf("%-"+strconv.Itoa(sizes[3])+"s", nullConstraint),
-					defaultValue,
-				}, " | ")
-
-				docs = append(docs, col)
+				values = append(values, column.Comment)
+				docs = append(docs, "| "+strings.Join(values, " | ")+" |")
 			}
 
 			if len(table.Indexes) > 0 {
-				docs = append(docs, "Indexes:")
+				docs = append(docs, "### Indexes")
+				docs = append(docs, "| "+strings.Join([]string{"Name", "IsPrimaryKey", "IsUnique", "IsExclusion", "IsDeferrable", "IndexDefinition"}, " | ")+" |")
+				docs = append(docs, "| "+strings.Join([]string{"---", "---", "---", "---", "---", "---"}, " | ")+" |")
 			}
 			sort.Slice(table.Indexes, func(i, j int) bool {
-				if table.Indexes[i].IsUnique && !table.Indexes[j].IsUnique {
-					return true
-				}
-				if !table.Indexes[i].IsUnique && table.Indexes[j].IsUnique {
-					return false
-				}
 				return table.Indexes[i].Name < table.Indexes[j].Name
 			})
 			for _, index := range table.Indexes {
-				if !index.IsPrimaryKey {
-					continue
-				}
-
-				deferrable := ""
-				if index.IsDeferrable {
-					// deferrable = " DEFERRABLE"
-				}
-				def := strings.TrimSpace(strings.Split(index.IndexDefinition, "USING")[1])
-				docs = append(docs, fmt.Sprintf("    %q PRIMARY KEY, %s%s", index.Name, def, deferrable))
-			}
-			for _, index := range table.Indexes {
+				values := []string{}
+				values = append(values, index.Name)
 				if index.IsPrimaryKey {
-					continue
+					values = append(values, "Yes")
+				} else {
+					values = append(values, "no")
 				}
-
-				uq := ""
 				if index.IsUnique {
-					uq = " UNIQUE CONSTRAINT,"
+					values = append(values, "Yes")
+				} else {
+					values = append(values, "no")
 				}
-				deferrable := ""
-				if index.IsDeferrable {
-					deferrable = " DEFERRABLE"
-				}
-				def := strings.TrimSpace(strings.Split(index.IndexDefinition, "USING")[1])
 				if index.IsExclusion {
-					def = "EXCLUDE USING " + def
+					values = append(values, "Yes")
+				} else {
+					values = append(values, "no")
 				}
-				docs = append(docs, fmt.Sprintf("    %q%s %s%s", index.Name, uq, def, deferrable))
+				if index.IsDeferrable {
+					values = append(values, "Yes")
+				} else {
+					values = append(values, "no")
+				}
+				values = append(values, index.IndexDefinition)
+
+				docs = append(docs, "| "+strings.Join(values, " | ")+" |")
 			}
 
 			numCheckConstraints := 0
@@ -319,29 +256,43 @@ func generateInternal(db *sql.DB, name string, run runFunc) (_ string, err error
 			}
 
 			if numCheckConstraints > 0 {
-				docs = append(docs, "Check constraints:")
+				docs = append(docs, "### Check constraints")
+				docs = append(docs, "| "+strings.Join([]string{"Name", "Definition"}, " | ")+" |")
+				docs = append(docs, "| "+strings.Join([]string{"---", "---"}, " | ")+" |")
 			}
 			for _, constraint := range table.Constraints {
 				if constraint.ConstraintType == "c" {
-					deferrable := ""
-					if constraint.IsDeferrable {
-						// deferrable = " DEFERRABLE"
-					}
-					docs = append(docs, fmt.Sprintf("    %q %s%s", constraint.Name, constraint.ConstraintDefinition, deferrable))
+					docs = append(docs, "| "+strings.Join([]string{
+						constraint.Name,
+						constraint.ConstraintDefinition,
+					}, " | ")+" |")
 				}
-
 			}
 			if numForeignKeyConstraints > 0 {
-				docs = append(docs, "Foreign-key constraints:")
+				docs = append(docs, "### Foreign key constraints")
+				docs = append(docs, "| "+strings.Join([]string{"Name", "References", "Definition"}, " | ")+" |")
+				docs = append(docs, "| "+strings.Join([]string{"---", "---", "---"}, " | ")+" |")
 			}
 			for _, constraint := range table.Constraints {
 				if constraint.ConstraintType == "f" {
-					deferrable := ""
-					if constraint.IsDeferrable {
-						// deferrable = " DEFERRABLE"
-					}
-					docs = append(docs, fmt.Sprintf("    %q %s%s", constraint.Name, constraint.ConstraintDefinition, deferrable))
+					docs = append(docs, "| "+strings.Join([]string{
+						constraint.Name,
+						constraint.RefTableName, // TODO - make a link
+						constraint.ConstraintDefinition,
+					}, " | ")+" |")
 				}
+			}
+
+			if len(table.Triggers) > 0 {
+				docs = append(docs, "### Triggers")
+				docs = append(docs, "| "+strings.Join([]string{"Name", "Definition"}, " | ")+" |")
+				docs = append(docs, "| "+strings.Join([]string{"---", "---"}, " | ")+" |")
+			}
+			for _, trigger := range table.Triggers {
+				docs = append(docs, "| "+strings.Join([]string{
+					trigger.Name,
+					trigger.Definition,
+				}, " | ")+" |")
 			}
 
 			type tableAndConstraint struct {
@@ -358,42 +309,22 @@ func generateInternal(db *sql.DB, name string, run runFunc) (_ string, err error
 				}
 			}
 			sort.Slice(tableAndConstraints, func(i, j int) bool {
-				// if tableAndConstraints[i].Table.Name == tableAndConstraints[j].Table.Name {
 				return tableAndConstraints[i].Constraint.Name < tableAndConstraints[j].Constraint.Name
-				// }
-				// return tableAndConstraints[i].Table.Name < tableAndConstraints[j].Table.Name
 			})
 			if len(tableAndConstraints) > 0 {
-				docs = append(docs, "Referenced by:")
+				docs = append(docs, "### References")
+				docs = append(docs, "| "+strings.Join([]string{"Name", "Definition"}, " | ")+" |")
+				docs = append(docs, "| "+strings.Join([]string{"---", "---"}, " | ")+" |")
 			}
 			for _, tableAndConstraint := range tableAndConstraints {
-				docs = append(docs, fmt.Sprintf("    TABLE %q CONSTRAINT %q %s", tableAndConstraint.Table.Name, tableAndConstraint.Constraint.Name, tableAndConstraint.Constraint.ConstraintDefinition))
-			}
-
-			if len(table.Triggers) > 0 {
-				docs = append(docs, "Triggers:")
-			}
-			for _, trigger := range table.Triggers {
-				def := strings.TrimSpace(strings.SplitN(trigger.Definition, trigger.Name, 2)[1])
-				docs = append(docs, fmt.Sprintf("    %s %s", trigger.Name, def))
-			}
-
-			docs = append(docs, "\n```\n")
-
-			if table.Comment != "" {
-				docs = append(docs, table.Comment+"\n")
-			}
-
-			sort.Slice(table.Columns, func(i, j int) bool { return table.Columns[i].Name < table.Columns[j].Name })
-			for _, column := range table.Columns {
-				if column.Comment != "" {
-					docs = append(docs, fmt.Sprintf("**%s**: %s\n", column.Name, column.Comment))
-				}
+				docs = append(docs, "| "+strings.Join([]string{
+					tableAndConstraint.Table.Name, // TOOD - make link
+					tableAndConstraint.Constraint.Name,
+				}, " | ")+" |")
 			}
 		}
 
 		sort.Slice(schema.Views, func(i, j int) bool { return schema.Views[i].Name < schema.Views[j].Name })
-
 		for _, view := range schema.Views {
 			docs = append(docs, fmt.Sprintf("# View \"public.%s\"\n", view.Name))
 			docs = append(docs, fmt.Sprintf("## View query:\n\n```sql\n%s\n```\n", view.Definition))
