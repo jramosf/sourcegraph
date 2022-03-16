@@ -52,7 +52,7 @@ export function useUiFeatures(): UseUiFeatures {
             dashboard: {
                 createPermissions: { submit: { disabled: !licensed } },
                 getAddRemoveInsightsPermission: (dashboard?: InsightDashboard) => {
-                    const permissions = getDashboardPermissions(dashboard)
+                    const permissions = getDashboardPermissions(dashboard, licensed)
 
                     if (!licensed) {
                         return {
@@ -67,7 +67,7 @@ export function useUiFeatures(): UseUiFeatures {
                     }
                 },
                 getContextActionsPermissions: (dashboard?: InsightDashboard) => {
-                    const permissions = getDashboardPermissions(dashboard)
+                    const permissions = getDashboardPermissions(dashboard, licensed)
 
                     return {
                         configure: {
