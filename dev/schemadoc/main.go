@@ -6,21 +6,19 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
-	"runtime"
 	"sort"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/grafana/regexp"
-	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	"golang.org/x/sync/errgroup"
 
 	connections "github.com/sourcegraph/sourcegraph/internal/database/connections/live"
-	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
+	migrationstore "github.com/sourcegraph/sourcegraph/internal/database/migration/store"
 	"github.com/sourcegraph/sourcegraph/internal/lazyregexp"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
@@ -170,55 +168,241 @@ func startDocker() (commandPrefix []string, shutdown func(), _ error) {
 }
 
 func generateInternal(db *sql.DB, name string, run runFunc) (_ string, err error) {
-	tables, err := getTables(db)
+	store := migrationstore.NewWithDB(db, "schema_migrations", migrationstore.NewOperations(&observation.TestContext))
+	schemas, err := store.Describe(context.Background())
 	if err != nil {
 		return "", err
 	}
 
-	tableDescriptions, err := fetchTableAndViewDescriptions(name, run)
-	if err != nil {
-		return "", err
-	}
+	docs := []string{}
+	types := map[string][]string{}
 
-	types, err := describeTypes(db)
-	if err != nil {
-		return "", err
-	}
+	for schemaName, schema := range schemas {
+		sort.Slice(schema.Tables, func(i, j int) bool { return schema.Tables[i].Name < schema.Tables[j].Name })
 
-	ch := make(chan table, len(tables))
-	for _, table := range tables {
-		ch <- table
-	}
-	close(ch)
+		for _, table := range schema.Tables {
+			sizes := []int{
+				len("Column"),
+				len("Type"),
+				len("Collation"),
+				len("Nullable"),
+				len("Default"),
+			}
+			for _, column := range table.Columns {
+				if n := len(column.Name); n > sizes[0] {
+					sizes[0] = n
+				}
+				if n := len(column.TypeName); n > sizes[1] {
+					sizes[1] = n
+				}
+				defaultValue := column.Default
+				if column.IsGenerated == "ALWAYS" {
+					defaultValue = "generated always as (" + column.GenerationExpression + ") stored"
+				}
+				if n := len(defaultValue); n > sizes[4] {
+					sizes[4] = n
+				}
+			}
 
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	var docs []string
+			center := func(s string, n int) string {
+				x := float64(n - len(s))
+				i := int(math.Floor(x / 2))
+				if i <= 0 {
+					i = 1
+				}
+				j := int(math.Ceil(x / 2))
+				if j <= 0 {
+					j = 1
+				}
 
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
-		wg.Add(1)
+				return strings.Repeat(" ", i) + s + strings.Repeat(" ", j)
+			}
 
-		go func() {
-			defer wg.Done()
+			header := strings.Join([]string{
+				center("Column", sizes[0]+2),
+				center("Type", sizes[1]+2),
+				center("Collation", sizes[2]+2),
+				center("Nullable", sizes[3]+2),
+				center("Default", sizes[4]+2),
+			}, "|")
 
-			for table := range ch {
-				logger.Println("describe", table.name)
+			sep := strings.Join([]string{
+				strings.Repeat("-", sizes[0]+2),
+				strings.Repeat("-", sizes[1]+2),
+				strings.Repeat("-", sizes[2]+2),
+				strings.Repeat("-", sizes[3]+2),
+				strings.Repeat("-", sizes[4]+2),
+			}, "+")
 
-				doc, err := describeTable(db, name, table, tableDescriptions)
-				if err != nil {
-					logger.Fatalf("error: %s", err)
+			docs = append(docs, fmt.Sprintf("# Table \"%s.%s\"", schemaName, table.Name))
+			docs = append(docs, "```")
+			docs = append(docs, header)
+			docs = append(docs, sep)
+
+			sort.Slice(table.Columns, func(i, j int) bool { return table.Columns[i].Index < table.Columns[j].Index })
+
+			for _, column := range table.Columns {
+				nullConstraint := "not null"
+				if column.IsNullable {
+					nullConstraint = ""
+				}
+
+				defaultValue := column.Default
+				if column.IsGenerated == "ALWAYS" {
+					defaultValue = "generated always as (" + column.GenerationExpression + ") stored"
+				}
+
+				col := " " + strings.Join([]string{
+					fmt.Sprintf("%-"+strconv.Itoa(sizes[0])+"s", column.Name),
+					fmt.Sprintf("%-"+strconv.Itoa(sizes[1])+"s", column.TypeName),
+					fmt.Sprintf("%-"+strconv.Itoa(sizes[2])+"s", ""),
+					fmt.Sprintf("%-"+strconv.Itoa(sizes[3])+"s", nullConstraint),
+					defaultValue,
+				}, " | ")
+
+				docs = append(docs, col)
+			}
+
+			if len(table.Indexes) > 0 {
+				docs = append(docs, "Indexes:")
+			}
+			sort.Slice(table.Indexes, func(i, j int) bool {
+				if table.Indexes[i].IsUnique && !table.Indexes[j].IsUnique {
+					return true
+				}
+				if !table.Indexes[i].IsUnique && table.Indexes[j].IsUnique {
+					return false
+				}
+				return table.Indexes[i].Name < table.Indexes[j].Name
+			})
+			for _, index := range table.Indexes {
+				if !index.IsPrimaryKey {
 					continue
 				}
 
-				mu.Lock()
-				docs = append(docs, doc)
-				mu.Unlock()
+				deferrable := ""
+				if index.IsDeferrable {
+					// deferrable = " DEFERRABLE"
+				}
+				def := strings.TrimSpace(strings.Split(index.IndexDefinition, "USING")[1])
+				docs = append(docs, fmt.Sprintf("    %q PRIMARY KEY, %s%s", index.Name, def, deferrable))
 			}
-		}()
-	}
+			for _, index := range table.Indexes {
+				if index.IsPrimaryKey {
+					continue
+				}
 
-	wg.Wait()
-	sort.Strings(docs)
+				uq := ""
+				if index.IsUnique {
+					uq = " UNIQUE CONSTRAINT,"
+				}
+				deferrable := ""
+				if index.IsDeferrable {
+					deferrable = " DEFERRABLE"
+				}
+				def := strings.TrimSpace(strings.Split(index.IndexDefinition, "USING")[1])
+				if index.IsExclusion {
+					def = "EXCLUDE USING " + def
+				}
+				docs = append(docs, fmt.Sprintf("    %q%s %s%s", index.Name, uq, def, deferrable))
+			}
+
+			numCheckConstraints := 0
+			numForeignKeyConstraints := 0
+			for _, constraint := range table.Constraints {
+				switch constraint.ConstraintType {
+				case "c":
+					numCheckConstraints++
+				case "f":
+					numForeignKeyConstraints++
+				}
+			}
+
+			if numCheckConstraints > 0 {
+				docs = append(docs, "Check constraints:")
+			}
+			for _, constraint := range table.Constraints {
+				if constraint.ConstraintType == "c" {
+					deferrable := ""
+					if constraint.IsDeferrable {
+						// deferrable = " DEFERRABLE"
+					}
+					docs = append(docs, fmt.Sprintf("    %q %s%s", constraint.Name, constraint.ConstraintDefinition, deferrable))
+				}
+
+			}
+			if numForeignKeyConstraints > 0 {
+				docs = append(docs, "Foreign-key constraints:")
+			}
+			for _, constraint := range table.Constraints {
+				if constraint.ConstraintType == "f" {
+					deferrable := ""
+					if constraint.IsDeferrable {
+						// deferrable = " DEFERRABLE"
+					}
+					docs = append(docs, fmt.Sprintf("    %q %s%s", constraint.Name, constraint.ConstraintDefinition, deferrable))
+				}
+			}
+
+			type tableAndConstraint struct {
+				migrationstore.Table
+				migrationstore.Constraint
+			}
+			tableAndConstraints := []tableAndConstraint{}
+
+			for _, otherTable := range schema.Tables {
+				for _, constraint := range otherTable.Constraints {
+					if constraint.RefTableName == table.Name {
+						tableAndConstraints = append(tableAndConstraints, tableAndConstraint{otherTable, constraint})
+					}
+				}
+			}
+			sort.Slice(tableAndConstraints, func(i, j int) bool {
+				// if tableAndConstraints[i].Table.Name == tableAndConstraints[j].Table.Name {
+				return tableAndConstraints[i].Constraint.Name < tableAndConstraints[j].Constraint.Name
+				// }
+				// return tableAndConstraints[i].Table.Name < tableAndConstraints[j].Table.Name
+			})
+			if len(tableAndConstraints) > 0 {
+				docs = append(docs, "Referenced by:")
+			}
+			for _, tableAndConstraint := range tableAndConstraints {
+				docs = append(docs, fmt.Sprintf("    TABLE %q CONSTRAINT %q %s", tableAndConstraint.Table.Name, tableAndConstraint.Constraint.Name, tableAndConstraint.Constraint.ConstraintDefinition))
+			}
+
+			if len(table.Triggers) > 0 {
+				docs = append(docs, "Triggers:")
+			}
+			for _, trigger := range table.Triggers {
+				def := strings.TrimSpace(strings.SplitN(trigger.Definition, trigger.Name, 2)[1])
+				docs = append(docs, fmt.Sprintf("    %s %s", trigger.Name, def))
+			}
+
+			docs = append(docs, "\n```\n")
+
+			if table.Comment != "" {
+				docs = append(docs, table.Comment+"\n")
+			}
+
+			sort.Slice(table.Columns, func(i, j int) bool { return table.Columns[i].Name < table.Columns[j].Name })
+			for _, column := range table.Columns {
+				if column.Comment != "" {
+					docs = append(docs, fmt.Sprintf("**%s**: %s\n", column.Name, column.Comment))
+				}
+			}
+		}
+
+		sort.Slice(schema.Views, func(i, j int) bool { return schema.Views[i].Name < schema.Views[j].Name })
+
+		for _, view := range schema.Views {
+			docs = append(docs, fmt.Sprintf("# View \"public.%s\"\n", view.Name))
+			docs = append(docs, fmt.Sprintf("## View query:\n\n```sql\n%s\n```\n", view.Definition))
+		}
+
+		for _, enum := range schema.Enums {
+			types[enum.Name] = enum.Labels
+		}
+	}
 
 	combined := strings.Join(docs, "\n")
 
@@ -244,220 +428,6 @@ func generateInternal(db *sql.DB, name string, run runFunc) (_ string, err error
 	}
 
 	return combined, nil
-}
-
-type table struct {
-	name   string
-	isView bool
-}
-
-func getTables(db *sql.DB) (tables []table, _ error) {
-	// Query names of all public tables and views.
-	rows, err := db.Query(`
-		SELECT table_name, FALSE AS is_view FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-		UNION
-		SELECT table_name, TRUE AS is_view FROM information_schema.views WHERE table_schema = 'public' AND table_name != 'pg_stat_statements';
-	`)
-	if err != nil {
-		return nil, errors.Wrap(err, "database.Query")
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var t table
-		if err := rows.Scan(&t.name, &t.isView); err != nil {
-			return nil, errors.Wrap(err, "rows.Scan")
-		}
-		tables = append(tables, t)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.Wrap(err, "rows.Err")
-	}
-
-	return tables, nil
-}
-
-var nameRe = regexp.MustCompile(`^\s*(Table|View) "public.(?P<name>\w+)"`)
-
-func fetchTableAndViewDescriptions(databaseName string, run runFunc) (map[string]string, error) {
-	out, err := run(false, "psql", "-X", "--quiet", "--dbname", databaseNamePrefix+databaseName, "-c", `\d *`)
-	if err != nil {
-		return nil, err
-	}
-
-	res := make(map[string]string)
-
-	objectDescriptions := strings.SplitAfter(out, "\n\n")
-	for _, objectDescription := range objectDescriptions {
-		if match := nameRe.FindStringSubmatch(objectDescription); match != nil {
-			res[match[2]] = objectDescription
-		}
-	}
-
-	return res, nil
-}
-
-func describeTable(db *sql.DB, databaseName string, table table, tableDescriptions map[string]string) (string, error) {
-	comment, err := getTableComment(db, table.name)
-	if err != nil {
-		return "", err
-	}
-
-	columnComments, err := getColumnComments(db, table.name)
-	if err != nil {
-		return "", err
-	}
-
-	// Get postgres "describe table" output.
-	out, ok := tableDescriptions[table.name]
-	if !ok {
-		return "", errors.Errorf("no description found for table %v", table)
-	}
-
-	lines := strings.Split(out, "\n")
-
-	buf := bytes.NewBuffer(nil)
-	buf.WriteString("# ")
-	buf.WriteString(strings.TrimSpace(lines[0]))
-	buf.WriteString("\n")
-	buf.WriteString("```\n")
-	buf.WriteString(strings.Join(lines[1:], "\n"))
-	buf.WriteString("```\n")
-
-	if comment != "" {
-		buf.WriteString("\n")
-		buf.WriteString(comment)
-		buf.WriteString("\n")
-	}
-
-	var columns []string
-	for k := range columnComments {
-		columns = append(columns, k)
-	}
-	sort.Strings(columns)
-
-	for _, k := range columns {
-		buf.WriteString("\n**")
-		buf.WriteString(k)
-		buf.WriteString("**: ")
-		buf.WriteString(columnComments[k])
-		buf.WriteString("\n")
-	}
-
-	if table.isView {
-		buf.WriteString("\n## View query:\n\n```sql\n")
-		q, err := getViewQuery(db, table.name)
-		if err != nil {
-			return "", err
-		}
-		buf.WriteString(q)
-		buf.WriteString("\n```\n")
-	}
-
-	return buf.String(), nil
-}
-
-func getTableComment(db *sql.DB, table string) (comment string, _ error) {
-	rows, err := db.Query("select obj_description($1::regclass)", table)
-	if err != nil {
-		return "", errors.Wrap(err, "database.Query")
-	}
-	defer rows.Close()
-
-	if rows.Next() {
-		if err := rows.Scan(&dbutil.NullString{S: &comment}); err != nil {
-			return "", errors.Wrap(err, "rows.Scan")
-		}
-	}
-	if err = rows.Err(); err != nil {
-		return "", errors.Wrap(err, "rows.Err")
-	}
-
-	return comment, nil
-}
-
-func getViewQuery(db *sql.DB, view string) (query string, _ error) {
-	rows, err := db.Query("SELECT definition FROM pg_views WHERE viewname = $1", view)
-	if err != nil {
-		return "", errors.Wrap(err, "database.Query")
-	}
-	defer rows.Close()
-
-	if rows.Next() {
-		if err := rows.Scan(&query); err != nil {
-			return "", errors.Wrap(err, "rows.Scan")
-		}
-	}
-	if err = rows.Err(); err != nil {
-		return "", errors.Wrap(err, "rows.Err")
-	}
-
-	return query, nil
-}
-
-func getColumnComments(db *sql.DB, table string) (map[string]string, error) {
-	rows, err := db.Query(`
-		SELECT
-			cols.column_name,
-			(
-				SELECT pg_catalog.col_description(c.oid, cols.ordinal_position::int)
-				FROM pg_catalog.pg_class c
-				WHERE c.oid = (SELECT cols.table_name::regclass::oid) AND c.relname = cols.table_name
-			) as column_comment
-		FROM information_schema.columns cols
-		WHERE cols.table_name = $1;
-	`, table)
-	if err != nil {
-		return nil, errors.Wrap(err, "database.Query")
-	}
-	defer rows.Close()
-
-	comments := map[string]string{}
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &dbutil.NullString{S: &v}); err != nil {
-			return nil, errors.Wrap(err, "rows.Scan")
-		}
-		if v != "" {
-			comments[k] = v
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.Wrap(err, "rows.Err")
-	}
-
-	return comments, nil
-}
-
-func describeTypes(db *sql.DB) (map[string][]string, error) {
-	rows, err := db.Query(`
-		SELECT
-			t.typname as type_name,
-			array_agg(e.enumlabel ORDER BY e.enumsortorder) as values
-		FROM pg_catalog.pg_type t
-			JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-			JOIN pg_catalog.pg_enum e ON t.oid = e.enumtypid
-		GROUP BY t.typname;
-	`)
-	if err != nil {
-		return nil, errors.Wrap(err, "database.Query")
-	}
-	defer rows.Close()
-
-	values := map[string][]string{}
-	for rows.Next() {
-		var k string
-		var v []string
-		if err := rows.Scan(&k, pq.Array(&v)); err != nil {
-			return nil, errors.Wrap(err, "rows.Scan")
-		}
-		values[k] = v
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.Wrap(err, "rows.Err")
-	}
-
-	return values, nil
 }
 
 func runWithPrefix(prefix []string) runFunc {
