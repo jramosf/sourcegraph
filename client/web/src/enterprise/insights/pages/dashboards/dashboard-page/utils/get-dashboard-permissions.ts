@@ -70,6 +70,6 @@ export function getTooltipMessage(permissions: DashboardPermissions): string | u
         case DashboardReasonDenied.AllVirtualDashboard:
             return "This is an automatically created dashboard that lists all the insights you have access to. You can't edit this dashboard."
         case DashboardReasonDenied.NotLicensed:
-            return 'TODO: Need unlicensed message'
+            return 'Limited access: upgrade your license to add insights to dashboards'
     }
 }
