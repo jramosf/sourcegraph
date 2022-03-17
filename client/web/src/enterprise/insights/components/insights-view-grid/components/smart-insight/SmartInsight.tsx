@@ -1,4 +1,4 @@
-import React, { forwardRef } from 'react'
+import React, { forwardRef, ReactElement } from 'react'
 
 import { ViewContexts } from '@sourcegraph/shared/src/api/extension/extensionHostApi'
 import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
