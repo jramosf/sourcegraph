@@ -29,7 +29,7 @@ type Client struct {
 }
 
 // NewClient returns a new Client for the given configuration.
-func NewClient(config *schema.GoModulesConnection, cli httpcli.Doer) *Client {
+func NewClient(config *schema.GoModuleProxiesConnection, cli httpcli.Doer) *Client {
 	var requestsPerHour float64
 	if config.RateLimit == nil || !config.RateLimit.Enabled {
 		requestsPerHour = math.Inf(1)
@@ -92,7 +92,6 @@ func (c *Client) get(ctx context.Context, paths ...string) (respBody io.Reader, 
 }
 
 func (c *Client) do(req *http.Request) (io.Reader, error) {
-
 	resp, err := c.cli.Do(req)
 	if err != nil {
 		return nil, err

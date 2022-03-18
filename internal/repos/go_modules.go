@@ -2,9 +2,9 @@ package repos
 
 import (
 	"context"
-	"github.com/sourcegraph/sourcegraph/internal/extsvc/npm"
-
 	"github.com/inconshreveable/log15"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/gomodproxy"
+	"github.com/sourcegraph/sourcegraph/internal/httpcli"
 
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	dependenciesStore "github.com/sourcegraph/sourcegraph/internal/codeintel/dependencies/store"
@@ -22,34 +22,34 @@ import (
 // A GoModulesSource creates git repositories from go module zip files of
 // published go dependencies from the Go ecosystem.
 type GoModulesSource struct {
-	svc        *types.ExternalService
-	connection schema.GoModulesConnection
-	depsStore  DependenciesStore
-	client     npm.Client
+	svc       *types.ExternalService
+	config    schema.GoModuleProxiesConnection
+	depsStore DependenciesStore
+	client    *gomodproxy.Client
 }
 
-// NewGoModulesSource returns a new GoSource from the given external
-// service.
-func NewGoModulesSource(svc *types.ExternalService) (*GoModulesSource, error) {
-	var c schema.GoModulesConnection
+// NewGoModulesSource returns a new GoModulesSource from the given external service.
+func NewGoModulesSource(svc *types.ExternalService, cf *httpcli.Factory) (*GoModulesSource, error) {
+	var c schema.GoModuleProxiesConnection
 	if err := jsonc.Unmarshal(svc.Config, &c); err != nil {
 		return nil, errors.Errorf("external service id=%d config error: %s", svc.ID, err)
 	}
+
+	cli, err := cf.Doer()
+	if err != nil {
+		return nil, err
+	}
+
 	return &GoModulesSource{
-		svc:        svc,
-		connection: c,
+		svc:    svc,
+		config: c,
 		/*dbStore initialized in SetDB */
-		client: npm.NewHTTPClient(c.Registry, c.RateLimit, c.Credentials),
+		client: gomodproxy.NewClient(&c, cli),
 	}, nil
 }
 
 var _ Source = &GoModulesSource{}
 
-// ListRepos returns all go artifacts accessible to all connections
-// configured in Sourcegraph via the external services configuration.
-//
-// [FIXME: deduplicate-listed-repos] The current implementation will return
-// multiple repos with the same URL if there are different versions of it.
 func (s *GoModulesSource) ListRepos(ctx context.Context, results chan SourceResult) {
 	goModules, err := goModules(s.connection)
 	if err != nil {
@@ -171,8 +171,7 @@ func (s *GoModulesSource) SetDB(db dbutil.DB) {
 	s.depsStore = dependenciesStore.GetStore(database.NewDB(db))
 }
 
-// goModules gets the list of applicable packages by de-duplicating dependencies
-// present in the configuration.
+// goModules gets the list of modules by de-duplicating dependencies
 func goModules(connection schema.GoModulesConnection) ([]*reposource.GoModule, error) {
 	dependencies, err := goDependencies(connection)
 	if err != nil {
