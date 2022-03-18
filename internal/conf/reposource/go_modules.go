@@ -1,7 +1,6 @@
 package reposource
 
 import (
-	"sort"
 	"strings"
 
 	"golang.org/x/mod/module"
@@ -65,24 +64,4 @@ func (m *GoDependency) GitTagFromVersion() string {
 
 func (d *GoDependency) Equal(other *GoDependency) bool {
 	return d == other || (d != nil && other != nil && d.mod == other.mod)
-}
-
-// GoDependencies is a helper type that implements the sort.Interface interface.
-type GoDependencies []*GoDependency
-
-func (ds GoDependencies) Less(i, j int) bool {
-	return
-}
-
-func SortNpmDependencies(dependencies []*NpmDependency) {
-	sort.Slice(dependencies, func(i, j int) bool {
-		iPkg, jPkg := dependencies[i].NpmPackage, dependencies[j].NpmPackage
-		if iPkg.Equal(jPkg) {
-			return versionGreaterThan(dependencies[i].Version, dependencies[j].Version)
-		}
-		if iPkg.scope == jPkg.scope {
-			return iPkg.name > jPkg.name
-		}
-		return iPkg.scope > jPkg.scope
-	})
 }

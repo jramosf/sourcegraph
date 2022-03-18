@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/sourcegraph/sourcegraph/internal/errcode"
-	"github.com/sourcegraph/sourcegraph/internal/ratelimit"
-	"github.com/sourcegraph/sourcegraph/schema"
 	"io"
 	"math"
 	"net/http"
@@ -18,7 +16,10 @@ import (
 	"golang.org/x/mod/module"
 	"golang.org/x/time/rate"
 
+	"github.com/sourcegraph/sourcegraph/internal/errcode"
 	"github.com/sourcegraph/sourcegraph/internal/httpcli"
+	"github.com/sourcegraph/sourcegraph/internal/ratelimit"
+	"github.com/sourcegraph/sourcegraph/schema"
 )
 
 // A Client to Go module proxies.
@@ -42,6 +43,21 @@ func NewClient(config *schema.GoModuleProxiesConnection, cli httpcli.Doer) *Clie
 		cli:     cli,
 		limiter: rate.NewLimiter(rate.Limit(requestsPerHour/3600.0), 100),
 	}
+}
+
+// GetVersion gets a single version of the given module if it exists.
+func (c *Client) GetVersion(ctx context.Context, mod, version string) (*module.Version, error) {
+	respBody, err := c.get(ctx, mod, "@v", version+".info")
+	if err != nil {
+		return nil, err
+	}
+
+	v := module.Version{Path: mod}
+	if err = json.NewDecoder(respBody).Decode(&v); err != nil {
+		return nil, err
+	}
+
+	return &v, nil
 }
 
 // ListVersions list all versions of the given module.
