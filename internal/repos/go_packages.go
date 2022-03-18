@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/npm"
 
 	"github.com/inconshreveable/log15"
 
@@ -11,7 +12,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
-	"github.com/sourcegraph/sourcegraph/internal/extsvc/go"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/go/gopackages"
 	"github.com/sourcegraph/sourcegraph/internal/jsonc"
 	"github.com/sourcegraph/sourcegraph/internal/types"
@@ -19,23 +19,23 @@ import (
 	"github.com/sourcegraph/sourcegraph/schema"
 )
 
-// A GoPackagesSource creates git repositories from `*.tar.gz` files of
+// A GoModulesSource creates git repositories from go module zip files of
 // published go dependencies from the Go ecosystem.
-type GoPackagesSource struct {
+type GoModulesSource struct {
 	svc        *types.ExternalService
-	connection schema.GoPackagesConnection
+	connection schema.GoModulesConnection
 	depsStore  DependenciesStore
 	client     npm.Client
 }
 
-// NewGoPackagesSource returns a new GoSource from the given external
+// NewGoModulesSource returns a new GoSource from the given external
 // service.
-func NewGoPackagesSource(svc *types.ExternalService) (*GoPackagesSource, error) {
-	var c schema.GoPackagesConnection
+func NewGoModulesSource(svc *types.ExternalService) (*GoModulesSource, error) {
+	var c schema.GoModulesConnection
 	if err := jsonc.Unmarshal(svc.Config, &c); err != nil {
 		return nil, errors.Errorf("external service id=%d config error: %s", svc.ID, err)
 	}
-	return &GoPackagesSource{
+	return &GoModulesSource{
 		svc:        svc,
 		connection: c,
 		/*dbStore initialized in SetDB */
@@ -43,21 +43,21 @@ func NewGoPackagesSource(svc *types.ExternalService) (*GoPackagesSource, error) 
 	}, nil
 }
 
-var _ Source = &GoPackagesSource{}
+var _ Source = &GoModulesSource{}
 
 // ListRepos returns all go artifacts accessible to all connections
 // configured in Sourcegraph via the external services configuration.
 //
 // [FIXME: deduplicate-listed-repos] The current implementation will return
 // multiple repos with the same URL if there are different versions of it.
-func (s *GoPackagesSource) ListRepos(ctx context.Context, results chan SourceResult) {
-	goPackages, err := goPackages(s.connection)
+func (s *GoModulesSource) ListRepos(ctx context.Context, results chan SourceResult) {
+	goModules, err := goModules(s.connection)
 	if err != nil {
 		results <- SourceResult{Err: err}
 		return
 	}
 
-	for _, goPackage := range goPackages {
+	for _, goPackage := range goModules {
 		info, err := s.client.GetPackageInfo(ctx, goPackage)
 		if err != nil {
 			results <- SourceResult{Err: err}
@@ -75,7 +75,7 @@ func (s *GoPackagesSource) ListRepos(ctx context.Context, results chan SourceRes
 	pkgVersions := map[string]*gopkg.PackageInfo{}
 	for {
 		dbDeps, err := s.depsStore.ListDependencyRepos(ctx, dependenciesStore.ListDependencyReposOpts{
-			Scheme:      dependenciesStore.GoPackagesScheme,
+			Scheme:      dependenciesStore.GoModulesScheme,
 			After:       lastID,
 			Limit:       100,
 			NewestFirst: true,
@@ -90,18 +90,18 @@ func (s *GoPackagesSource) ListRepos(ctx context.Context, results chan SourceRes
 		totalDBFetched += len(dbDeps)
 		lastID = dbDeps[len(dbDeps)-1].ID
 		for _, dbDep := range dbDeps {
-			parsedDbPackage, err := reposource.ParseGoPackageFromPackageSyntax(dbDep.Name)
+			parsedDbPackage, err := reposource.ParseGoModuleFromPackageSyntax(dbDep.Name)
 			if err != nil {
 				log15.Error("failed to parse go package name retrieved from database", "package", dbDep.Name, "error", err)
 				continue
 			}
 
-			goDependency := reposource.GoDependency{GoPackage: parsedDbPackage, Version: dbDep.Version}
+			goDependency := reposource.GoDependency{GoModule: parsedDbPackage, Version: dbDep.Version}
 			pkgKey := goDependency.PackageSyntax()
 			info := pkgVersions[pkgKey]
 
 			if info == nil {
-				info, err = s.client.GetPackageInfo(ctx, goDependency.GoPackage)
+				info, err = s.client.GetPackageInfo(ctx, goDependency.GoModule)
 				if err != nil {
 					pkgVersions[pkgKey] = &gopkg.PackageInfo{Versions: map[string]*gopkg.DependencyInfo{}}
 					continue
@@ -114,16 +114,16 @@ func (s *GoPackagesSource) ListRepos(ctx context.Context, results chan SourceRes
 				continue
 			}
 
-			repo := s.makeRepo(goDependency.GoPackage, info.Description)
+			repo := s.makeRepo(goDependency.GoModule, info.Description)
 			totalDBResolved++
 			results <- SourceResult{Source: s, Repo: repo}
 		}
 	}
-	log15.Info("finish resolving go artifacts", "totalDB", totalDBFetched, "totalDBResolved", totalDBResolved, "totalConfig", len(goPackages))
+	log15.Info("finish resolving go artifacts", "totalDB", totalDBFetched, "totalDBResolved", totalDBResolved, "totalConfig", len(goModules))
 }
 
-func (s *GoPackagesSource) GetRepo(ctx context.Context, name string) (*types.Repo, error) {
-	pkg, err := reposource.ParseGoPackageFromRepoURL(name)
+func (s *GoModulesSource) GetRepo(ctx context.Context, name string) (*types.Repo, error) {
+	pkg, err := reposource.ParseGoModuleFromRepoURL(name)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +136,7 @@ func (s *GoPackagesSource) GetRepo(ctx context.Context, name string) (*types.Rep
 	return s.makeRepo(pkg, info.Description), nil
 }
 
-func (s *GoPackagesSource) makeRepo(goPackage *reposource.GoPackage, description string) *types.Repo {
+func (s *GoModulesSource) makeRepo(goPackage *reposource.GoModule, description string) *types.Repo {
 	urn := s.svc.URN()
 	cloneURL := goPackage.CloneURL()
 	repoName := goPackage.RepoName()
@@ -146,8 +146,8 @@ func (s *GoPackagesSource) makeRepo(goPackage *reposource.GoPackage, description
 		URI:         string(repoName),
 		ExternalRepo: api.ExternalRepoSpec{
 			ID:          string(repoName),
-			ServiceID:   extsvc.TypeGoPackages,
-			ServiceType: extsvc.TypeGoPackages,
+			ServiceID:   extsvc.TypeGoModules,
+			ServiceType: extsvc.TypeGoModules,
 		},
 		Private: false,
 		Sources: map[string]*types.SourceInfo{
@@ -163,33 +163,33 @@ func (s *GoPackagesSource) makeRepo(goPackage *reposource.GoPackage, description
 }
 
 // ExternalServices returns a singleton slice containing the external service.
-func (s *GoPackagesSource) ExternalServices() types.ExternalServices {
+func (s *GoModulesSource) ExternalServices() types.ExternalServices {
 	return types.ExternalServices{s.svc}
 }
 
-func (s *GoPackagesSource) SetDB(db dbutil.DB) {
+func (s *GoModulesSource) SetDB(db dbutil.DB) {
 	s.depsStore = dependenciesStore.GetStore(database.NewDB(db))
 }
 
-// goPackages gets the list of applicable packages by de-duplicating dependencies
+// goModules gets the list of applicable packages by de-duplicating dependencies
 // present in the configuration.
-func goPackages(connection schema.GoPackagesConnection) ([]*reposource.GoPackage, error) {
+func goModules(connection schema.GoModulesConnection) ([]*reposource.GoModule, error) {
 	dependencies, err := goDependencies(connection)
 	if err != nil {
 		return nil, err
 	}
-	goPackages := []*reposource.GoPackage{}
+	goModules := []*reposource.GoModule{}
 	isAdded := make(map[string]bool)
 	for _, dep := range dependencies {
 		if key := dep.PackageSyntax(); !isAdded[key] {
-			goPackages = append(goPackages, dep.GoPackage)
+			goModules = append(goModules, dep.GoModule)
 			isAdded[key] = true
 		}
 	}
-	return goPackages, nil
+	return goModules, nil
 }
 
-func goDependencies(connection schema.GoPackagesConnection) (dependencies []*reposource.GoDependency, err error) {
+func goDependencies(connection schema.GoModulesConnection) (dependencies []*reposource.GoDependency, err error) {
 	for _, dep := range connection.Dependencies {
 		dependency, err := reposource.ParseGoDependency(dep)
 		if err != nil {

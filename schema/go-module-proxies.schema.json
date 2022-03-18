@@ -1,29 +1,27 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "go-modules.schema.json#",
-  "title": "GoModulesConnection",
-  "description": "Configuration for a connection to a Go modules proxy",
+  "$id": "go-module-proxies.schema.json#",
+  "title": "GoModuleProxiesConnection",
+  "description": "Configuration for a connection to Go module proxies",
   "allowComments": true,
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "url"
+    "urls"
   ],
   "properties": {
-    "token": {
-      "description": "Access token for logging into the go registry.",
-      "type": "string",
-      "default": "",
+    "urls": {
+      "description": "The list of Go module proxy URLs to fetch modules from. 404 Not found or 410 Gone responses will result in the next URL to be attempted.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": ["https://proxy.golang.org"],
       "examples": [
-        "CRs5VaTVbR7pBPcVpaxwQeafrYOId7IdVUiZCkFCqnw="
-      ]
-    },
-    "url": {
-      "description": "The URL at which the go registry can be found.",
-      "type": "string",
-      "default": "https://registry.gojs.org",
-      "examples": [
-        "https://go-registry.mycompany.com"
+        [
+          "https://athens.mycorp.org",
+          "https://proxy.golang.org"
+        ]
       ]
     },
     "rateLimit": {
@@ -60,7 +58,7 @@
       },
       "examples": [
         [
-          "cloud.google.com/go/kms v1.1.0"
+          "cloud.google.com/go/kms@v1.1.0"
         ]
       ]
     }

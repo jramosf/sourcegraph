@@ -900,16 +900,14 @@ type GitoliteConnection struct {
 	Prefix string `json:"prefix"`
 }
 
-// GoModulesConnection description: Configuration for a connection to a Go modules proxy
-type GoModulesConnection struct {
+// GoModuleProxiesConnection description: Configuration for a connection to Go module proxies
+type GoModuleProxiesConnection struct {
 	// Dependencies description: An array of strings specifying Go modules to mirror in Sourcegraph.
 	Dependencies []string `json:"dependencies,omitempty"`
 	// RateLimit description: Rate limit applied when making background API requests to the go registry.
 	RateLimit *GoRateLimit `json:"rateLimit,omitempty"`
-	// Token description: Access token for logging into the go registry.
-	Token string `json:"token,omitempty"`
-	// Url description: The URL at which the go registry can be found.
-	Url string `json:"url"`
+	// Urls description: The list of Go module proxy URLs to fetch modules from. 404 Not found or 410 Gone responses will result in the next URL to be attempted.
+	Urls []string `json:"urls"`
 }
 
 // GoRateLimit description: Rate limit applied when making background API requests to the go registry.
